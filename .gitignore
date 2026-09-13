@@ -9,3 +9,5 @@ reports/
 *_backup.py
 *_final.py
 candidate_sources.jsonl
+*_broken.py
+*_before_*.py
