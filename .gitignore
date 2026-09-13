@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+reports/
+*.log
+*_backup.py
+*_final.py
+candidate_sources.jsonl
