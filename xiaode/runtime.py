@@ -14,6 +14,19 @@ from .models import APP_VERSION
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 
+_FAILURE_ARTIFACTS = {
+    "report_validation": "report_validation.json",
+    "rejected_report": "report_draft_rejected_final.md",
+    "report_draft": "report_draft.json",
+    "report_normalization": "report_normalization.json",
+    "evidence": "evidence.md",
+    "evidence_json": "evidence.json",
+    "audit": "audit.md",
+    "audit_json": "audit.json",
+    "sources": "sources.json",
+    "events": "events.jsonl",
+}
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
@@ -87,6 +100,23 @@ class RunWorkspace:
         )
 
     def write_failure_manifest(self, error: BaseException) -> None:
+        artifacts = {
+            key: name
+            for key, name in _FAILURE_ARTIFACTS.items()
+            if self.path(name).is_file()
+        }
+        diagnostics: dict[str, Any] = {}
+        validation_path = self.path("report_validation.json")
+        if validation_path.is_file():
+            try:
+                validation = json.loads(validation_path.read_text(encoding="utf-8"))
+                validation_errors = validation.get("errors", [])
+                if isinstance(validation_errors, list):
+                    diagnostics["validation_errors"] = [
+                        str(item)[:500] for item in validation_errors[:30]
+                    ]
+            except (OSError, json.JSONDecodeError, AttributeError):
+                diagnostics["validation_errors"] = ["报告校验详情文件无法读取"]
         self.write_json(
             "manifest.json",
             {
@@ -96,5 +126,7 @@ class RunWorkspace:
                 "finished_at": utc_now(),
                 "error_type": type(error).__name__,
                 "error": str(error)[:1000],
+                "diagnostics": diagnostics,
+                "artifacts": artifacts,
             },
         )

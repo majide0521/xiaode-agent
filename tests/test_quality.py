@@ -1,8 +1,18 @@
 import unittest
 
-from xiaode.models import AuditDecision, AuditReport, EvidenceItem, EvidenceLedger, SourceRecord
+from xiaode.models import (
+    AuditDecision,
+    AuditReport,
+    EvidenceItem,
+    EvidenceLedger,
+    ReportDraft,
+    ReportSection,
+    ReportStatement,
+    SourceRecord,
+)
 from xiaode.quality import (
     apply_quality_gate,
+    render_report_draft,
     requested_dimensions,
     validate_evidence_ledger,
     validate_report,
@@ -137,6 +147,115 @@ class ReportValidationTests(unittest.TestCase):
         )
         self.assertFalse(result.valid)
         self.assertTrue(any("URL 不匹配" in error for error in result.errors))
+
+    def test_structured_renderer_replaces_fact_text_and_builds_all_sections(self) -> None:
+        ledger = EvidenceLedger(evidence=[evidence()], missing_evidence=[])
+        quality = apply_quality_gate(ledger, audit(), {}, "商业模式和定价")
+        draft = ReportDraft(
+            sections=[
+                ReportSection(
+                    section_id="7",
+                    statements=[
+                        ReportStatement(
+                            kind="FACT",
+                            text="Unsupported claim about 200 million users [E99].",
+                            evidence_ids=["E01"],
+                        )
+                    ],
+                ),
+                ReportSection(
+                    section_id="13",
+                    statements=[
+                        ReportStatement(
+                            kind="ANALYSIS",
+                            text="The verified price supports a subscription positioning.",
+                            evidence_ids=["E01"],
+                        )
+                    ],
+                ),
+            ]
+        )
+        report, adjustments = render_report_draft(draft, ledger, quality.audit)
+        self.assertNotIn("200 million", report)
+        self.assertIn("The Pro plan costs $20 per month.", report)
+        self.assertIn("## 0. Executive Summary", report)
+        self.assertIn("## 15. Sources", report)
+        self.assertTrue(adjustments)
+        self.assertTrue(
+            validate_report(
+                report,
+                {"E01"},
+                {"E01": "https://example.com/pricing"},
+            ).valid
+        )
+
+    def test_structured_renderer_safely_normalizes_invalid_references(self) -> None:
+        ledger = EvidenceLedger(evidence=[evidence()], missing_evidence=[])
+        quality = apply_quality_gate(ledger, audit(), {}, "商业模式和定价")
+        draft = ReportDraft(
+            sections=[
+                ReportSection(
+                    section_id="12",
+                    statements=[
+                        ReportStatement(
+                            kind="FACT",
+                            text="Unsupported fact.",
+                            evidence_ids=["E99"],
+                        ),
+                        ReportStatement(
+                            kind="RECOMMENDATION",
+                            text="Run a pricing experiment and compare conversion.",
+                            evidence_ids=[],
+                        ),
+                    ],
+                )
+            ]
+        )
+        report, adjustments = render_report_draft(draft, ledger, quality.audit)
+        self.assertNotIn("E99", report)
+        self.assertIn("【待验证假设】Run a pricing experiment", report)
+        self.assertTrue(any("降级" in item for item in adjustments))
+        self.assertTrue(
+            validate_report(
+                report,
+                {"E01"},
+                {"E01": "https://example.com/pricing"},
+            ).valid
+        )
+
+    def test_structured_renderer_appends_caution_qualification(self) -> None:
+        ledger = EvidenceLedger(evidence=[evidence()], missing_evidence=[])
+        quality = apply_quality_gate(
+            ledger,
+            audit("CAUTION", "据官方页面 [E99]\n仅代表抓取时的公开表述"),
+            {},
+            "商业模式和定价",
+        )
+        draft = ReportDraft(
+            sections=[
+                ReportSection(
+                    section_id="7",
+                    statements=[
+                        ReportStatement(kind="FACT", text="Pricing fact", evidence_ids=["E01"]),
+                        ReportStatement(
+                            kind="ANALYSIS",
+                            text="The price indicates a subscription offer.",
+                            evidence_ids=["E01"],
+                        ),
+                    ],
+                )
+            ]
+        )
+        report, _ = render_report_draft(draft, ledger, quality.audit)
+        self.assertIn("限定说明：据官方页面 仅代表抓取时的公开表述", report)
+        self.assertNotIn("E99", report)
+        self.assertTrue(
+            validate_report(
+                report,
+                {"E01"},
+                {"E01": "https://example.com/pricing"},
+            ).valid
+        )
 
 
 if __name__ == "__main__":

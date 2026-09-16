@@ -3,7 +3,17 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from xiaode.models import AuditDecision, AuditReport, EvidenceItem, EvidenceLedger, SearchPlan, SourceRecord
+from xiaode.models import (
+    AuditDecision,
+    AuditReport,
+    EvidenceItem,
+    EvidenceLedger,
+    ReportDraft,
+    ReportSection,
+    ReportStatement,
+    SearchPlan,
+    SourceRecord,
+)
 from xiaode.pipeline import PipelineConfig, ResearchPipeline
 from xiaode.runtime import RunWorkspace
 
@@ -82,29 +92,30 @@ class OfflinePipeline(ResearchPipeline):
             ],
             risks=[],
         )
-        headings = [
-            "# 竞品研究报告",
-            "## 0. Executive Summary",
-            "## 1. 一句话判断",
-            "## 2. 产品定位",
-            "## 3. 核心用户与场景",
-            "## 4. 核心产品能力",
-            "## 5. 最近半年产品变化",
-            "## 6. 用户与市场表现",
-            "## 7. 商业模式",
-            "## 8. 增长逻辑",
-            "## 9. 核心竞争壁垒",
-            "## 10. 主要问题与风险",
-            "## 11. 对用户指定业务的威胁",
-            "## 12. 值得借鉴的策略",
-            "## 13. 最终判断",
-            "【事实】The Pro plan costs $20 per month. [E01]",
-            "【判断】This supports a paid subscription positioning. [E01]",
-            "## 14. 研究缺口",
-            "【研究缺口】缺少用户留存数据。",
-            "## 15. Sources",
-            "- [E01] https://example.com/pricing",
-        ]
+        report_draft = ReportDraft(
+            sections=[
+                ReportSection(
+                    section_id="7",
+                    statements=[
+                        ReportStatement(
+                            kind="FACT",
+                            text="The pricing evidence supports a paid plan.",
+                            evidence_ids=["E01"],
+                        )
+                    ],
+                ),
+                ReportSection(
+                    section_id="13",
+                    statements=[
+                        ReportStatement(
+                            kind="ANALYSIS",
+                            text="This supports a paid subscription positioning.",
+                            evidence_ids=["E01"],
+                        )
+                    ],
+                ),
+            ]
+        )
         self.outputs: list[Any] = [
             SearchPlan(
                 queries=[
@@ -115,7 +126,7 @@ class OfflinePipeline(ResearchPipeline):
             ),
             ledger,
             audit,
-            "\n\n".join(headings),
+            report_draft,
         ]
 
     def _planner(self) -> Any:
@@ -146,6 +157,10 @@ class PipelineIntegrationTests(unittest.TestCase):
             self.assertEqual(manifest["quality"]["report_validation"], "PASS")
             self.assertTrue((workspace.run_dir / "report.md").is_file())
             self.assertTrue((workspace.run_dir / "audit.json").is_file())
+            self.assertTrue((workspace.run_dir / "report_draft.json").is_file())
+            report = (workspace.run_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## 15. Sources", report)
+            self.assertIn("[E01] https://example.com/pricing", report)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # 小德竞品研究 Agent
 
-当前版本：v0.7.0（Verifiable Pipeline）
+当前版本：v0.7.1（Deterministic Report Rendering）
 
 这是一个面向竞品研究的多阶段 Agent。它的目标不是“尽可能写满一份报告”，而是在证据不足时主动留白，并让每条事实都能追溯到程序真实读取的网页。
 
@@ -18,18 +18,30 @@
 独立 Auditor
   ↓ Python fail-closed 硬门禁
 Writer 专用白名单证据包
-  ↓ 报告引用与数字/日期校验；失败时最多修复一次
+  ↓ 结构化 ReportDraft
+Python 确定性渲染
+  ↓ 自动生成章节、标签、引用、CAUTION 限定语和 Sources
+最终报告硬校验
 独立运行目录 + manifest
 ```
 
 设计原则：模型负责搜索规划、语义抽取、审核与分析；代码负责权限、预算、数据契约、来源映射和发布门禁。
 
-## v0.7.0 的主要升级
+## v0.7.1 的主要升级
+
+- Writer 改为 Pydantic `ReportDraft` 结构化输出，不再让模型直接拼装 Markdown。
+- Python 确定性生成全部章节、事实/判断标签、`[E##]` 引用和 Sources URL 映射。
+- FACT 文本强制回落到通过审核的 Evidence Claim，模型不能借合法编号改写或扩大事实。
+- 无有效引用的事实/判断会被删除；无直接依据的建议自动降级为待验证假设；空章节自动写研究缺口。
+- CAUTION 证据的限定语由程序自动追加，避免 Writer 漏写或升级为确定事实。
+- 失败页面现在直接展示具体校验错误，并允许下载校验详情、被拒报告、结构化草稿、证据和审计产物。
+
+## v0.7.0 的基础能力
 
 - 官网输入支持域名或完整 URL，只提取规范主机名，修复路径和查询参数导致 Tier A 失效的问题。
 - 所有用户可影响的网页读取只允许公开 HTTP(S) 地址，逐跳验证重定向和 DNS，阻止本机/内网/保留地址，并限制响应体积。
 - 每次运行使用 UUID 独立目录；Streamlit 只读取本次 `manifest.json` 指定的产物，不再用“最新文件”猜测结果。
-- Planner、Extractor 和 Auditor 使用 Pydantic 结构化输出；网页正文被明确视为不可信数据。
+- Planner、Extractor、Auditor 和 Writer 使用 Pydantic 结构化输出；网页正文被明确视为不可信数据。
 - Auditor 同时收到 Evidence、程序预检结果和对应原始上下文。
 - Python 门禁检查逐字引文、Source ID、URL、Tier、置信度、审计完整性和 CAUTION 限定语；任何不一致默认 REJECTED。
 - 审核分别统计 Approved Rate 和 Usable Rate，不再把 CAUTION 算成 100% 通过。

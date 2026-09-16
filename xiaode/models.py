@@ -5,12 +5,30 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 SourceTier = Literal["Tier A", "Tier B", "Tier C", "Tier D"]
 Confidence = Literal["High", "Medium", "Low"]
 ClaimNature = Literal["FACT", "REPORTED_CLAIM"]
 AuditStatus = Literal["APPROVED", "CAUTION", "REJECTED"]
+ReportStatementKind = Literal["FACT", "ANALYSIS", "RECOMMENDATION", "HYPOTHESIS", "GAP"]
+ReportSectionId = Literal[
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+]
 
 
 class StrictModel(BaseModel):
@@ -141,6 +159,21 @@ class QualityResult(StrictModel):
     precheck_errors: dict[str, list[str]]
     evidence_coverage: list[CoverageItem]
     writer_packet: str
+
+
+class ReportStatement(StrictModel):
+    kind: ReportStatementKind
+    text: str = Field(min_length=2, max_length=1_200)
+    evidence_ids: list[str] = Field(max_length=8)
+
+
+class ReportSection(StrictModel):
+    section_id: ReportSectionId
+    statements: list[ReportStatement] = Field(min_length=1, max_length=8)
+
+
+class ReportDraft(StrictModel):
+    sections: list[ReportSection] = Field(min_length=1, max_length=15)
 
 
 class ReportValidation(StrictModel):

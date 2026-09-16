@@ -42,6 +42,28 @@ class RuntimeIsolationTests(unittest.TestCase):
             else:
                 os.environ["UNRELATED_SECRET"] = old_value
 
+    def test_failure_manifest_exposes_bounded_diagnostics_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = RunWorkspace.create(
+                output_root=Path(temporary),
+                run_id="failed_12345678",
+            )
+            workspace.write_json(
+                "report_validation.json",
+                {"valid": False, "referenced_ids": ["E01"], "errors": ["第 9 行缺少引用"]},
+            )
+            workspace.write_text("report_draft_rejected_final.md", "rejected")
+            workspace.write_failure_manifest(RuntimeError("报告校验失败"))
+
+            manifest = load_manifest(workspace.run_dir)
+            self.assertEqual(manifest["status"], "failed")
+            self.assertEqual(
+                manifest["diagnostics"]["validation_errors"],
+                ["第 9 行缺少引用"],
+            )
+            rejected_path = artifact_path(workspace.run_dir, manifest, "rejected_report")
+            self.assertEqual(rejected_path.read_text(encoding="utf-8"), "rejected")
+
 
 if __name__ == "__main__":
     unittest.main()

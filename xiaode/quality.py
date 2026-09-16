@@ -13,6 +13,8 @@ from .models import (
     EvidenceItem,
     EvidenceLedger,
     QualityResult,
+    ReportDraft,
+    ReportStatement,
     ReportValidation,
     SourceRecord,
 )
@@ -65,6 +67,35 @@ DIMENSIONS = OrderedDict(
         },
     }
 )
+
+
+REPORT_SECTIONS = OrderedDict(
+    {
+        "0": "Executive Summary",
+        "1": "一句话判断",
+        "2": "产品定位",
+        "3": "核心用户与场景",
+        "4": "核心产品能力",
+        "5": "最近半年产品变化",
+        "6": "用户与市场表现",
+        "7": "商业模式",
+        "8": "增长逻辑",
+        "9": "核心竞争壁垒",
+        "10": "主要问题与风险",
+        "11": "对用户指定业务的威胁",
+        "12": "值得借鉴的策略",
+        "13": "最终判断",
+        "14": "研究缺口",
+    }
+)
+
+REPORT_LABELS = {
+    "FACT": "【事实】",
+    "ANALYSIS": "【判断】",
+    "RECOMMENDATION": "【建议】",
+    "HYPOTHESIS": "【待验证假设】",
+    "GAP": "【研究缺口】",
+}
 
 
 def requested_dimensions(focus: str) -> list[str]:
@@ -352,10 +383,152 @@ def apply_quality_gate(
 
 _CITATION = re.compile(r"\[(E\d{2,})\]")
 _BARE_EVIDENCE = re.compile(r"(?<!\[)\b(E\d{2,})\b(?!\])")
+_REPORT_LABEL_PREFIX = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:【(?:事实|判断|建议|待验证假设|研究缺口)】\s*)+"
+)
 _STRONG_FACT = re.compile(
     r"(?:\b20\d{2}\b|[$¥€£]\s*\d|\d+(?:\.\d+)?\s*(?:%|％|万|亿|million|billion|美元|元|月|年))",
     re.IGNORECASE,
 )
+
+
+def _clean_report_text(value: str) -> str:
+    text = value.replace("\r", " ").replace("\n", " ")
+    text = _REPORT_LABEL_PREFIX.sub("", text)
+    text = _CITATION.sub("", text)
+    text = _BARE_EVIDENCE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" -*#")
+    return text
+
+
+def render_report_draft(
+    draft: ReportDraft,
+    ledger: EvidenceLedger,
+    audit: EffectiveAudit,
+) -> tuple[str, list[str]]:
+    """Normalize a structured draft and render citation-safe Markdown deterministically."""
+
+    allowed_order = audit.approved_ids + audit.caution_ids
+    allowed_ids = set(allowed_order)
+    evidence_map = {
+        item.evidence_id: item for item in ledger.evidence if item.evidence_id in allowed_ids
+    }
+    decision_map = {
+        item.evidence_id: item for item in audit.decisions if item.evidence_id in allowed_ids
+    }
+    fallback_id = next((item for item in allowed_order if item in evidence_map), None)
+    if fallback_id is None:
+        raise ValueError("没有可用于生成报告的通过门禁证据")
+
+    adjustments: list[str] = []
+    raw_sections: dict[str, list[ReportStatement]] = {
+        section_id: [] for section_id in REPORT_SECTIONS
+    }
+    seen_sections: set[str] = set()
+    for section in draft.sections:
+        if section.section_id in seen_sections:
+            adjustments.append(f"合并重复章节 {section.section_id}")
+        seen_sections.add(section.section_id)
+        raw_sections[section.section_id].extend(section.statements)
+
+    normalized: dict[str, list[tuple[str, str, list[str]]]] = {
+        section_id: [] for section_id in REPORT_SECTIONS
+    }
+    for section_id, title in REPORT_SECTIONS.items():
+        for statement in raw_sections[section_id]:
+            valid_ids = list(
+                dict.fromkeys(
+                    evidence_id
+                    for evidence_id in statement.evidence_ids
+                    if evidence_id in allowed_ids and evidence_id in evidence_map
+                )
+            )
+            invalid_ids = sorted(set(statement.evidence_ids) - set(valid_ids))
+            if invalid_ids:
+                adjustments.append(
+                    f"章节 {section_id} 移除未通过门禁的证据：{', '.join(invalid_ids)}"
+                )
+
+            text = _clean_report_text(statement.text)
+            if statement.kind == "FACT":
+                if not valid_ids:
+                    adjustments.append(f"章节 {section_id} 删除无有效引用的事实")
+                    continue
+                for evidence_id in valid_ids:
+                    claim = _clean_report_text(evidence_map[evidence_id].claim)
+                    if claim:
+                        normalized[section_id].append(("FACT", claim, [evidence_id]))
+                continue
+
+            kind = statement.kind
+            if kind == "ANALYSIS" and not valid_ids:
+                adjustments.append(f"章节 {section_id} 删除无有效引用的判断")
+                continue
+            if kind == "RECOMMENDATION" and not valid_ids:
+                kind = "HYPOTHESIS"
+                adjustments.append(f"章节 {section_id} 将无直接依据的建议降级为待验证假设")
+            if kind == "GAP":
+                valid_ids = []
+            if text:
+                normalized[section_id].append((kind, text, valid_ids))
+
+        if not normalized[section_id]:
+            normalized[section_id].append(
+                (
+                    "GAP",
+                    f"当前通过审核的证据不足以覆盖“{title}”，需补充一手或权威来源。",
+                    [],
+                )
+            )
+            adjustments.append(f"章节 {section_id} 自动补充研究缺口")
+
+    all_kinds = [kind for statements in normalized.values() for kind, _, _ in statements]
+    if "FACT" not in all_kinds:
+        normalized["0"].insert(
+            0,
+            ("FACT", _clean_report_text(evidence_map[fallback_id].claim), [fallback_id]),
+        )
+        adjustments.append("自动补充一条逐字取自证据 Claim 的事实")
+    if "ANALYSIS" not in all_kinds:
+        normalized["13"].append(
+            (
+                "ANALYSIS",
+                "基于当前已核验证据，只能形成有限判断；未被证据覆盖的部分不应外推。",
+                [fallback_id],
+            )
+        )
+        adjustments.append("自动补充证据边界判断")
+
+    referenced_ids: list[str] = []
+    lines = ["# 竞品研究报告", ""]
+    for section_id, title in REPORT_SECTIONS.items():
+        lines.extend([f"## {section_id}. {title}", ""])
+        seen_lines: set[tuple[str, str, tuple[str, ...]]] = set()
+        for kind, text, evidence_ids in normalized[section_id]:
+            key = (kind, text, tuple(evidence_ids))
+            if key in seen_lines:
+                continue
+            seen_lines.add(key)
+            qualification_candidates: list[str] = []
+            for evidence_id in evidence_ids:
+                decision = decision_map.get(evidence_id)
+                if decision is None or decision.status != "CAUTION":
+                    continue
+                cleaned_qualification = _clean_report_text(decision.required_qualification)
+                if cleaned_qualification:
+                    qualification_candidates.append(cleaned_qualification)
+            qualifications = list(dict.fromkeys(qualification_candidates))
+            qualification = f"（限定说明：{'；'.join(qualifications)}）" if qualifications else ""
+            citations = " ".join(f"[{evidence_id}]" for evidence_id in evidence_ids)
+            referenced_ids.extend(evidence_ids)
+            suffix = f" {citations}" if citations else ""
+            lines.extend([f"- {REPORT_LABELS[kind]}{text}{qualification}{suffix}", ""])
+
+    unique_references = list(dict.fromkeys(referenced_ids))
+    lines.extend(["## 15. Sources", ""])
+    for evidence_id in unique_references:
+        lines.extend([f"- [{evidence_id}] {evidence_map[evidence_id].url}", ""])
+    return "\n".join(lines).rstrip() + "\n", list(dict.fromkeys(adjustments))
 
 
 def _same_canonical_url(left: str, right: str) -> bool:
@@ -379,23 +552,9 @@ def validate_report(
         errors.append("报告没有使用任何 [E##] 引用")
     if not report.lstrip().startswith("# 竞品研究报告"):
         errors.append("报告缺少规定的一级标题")
-    required_sections = (
-        "## 0. Executive Summary",
-        "## 1. 一句话判断",
-        "## 2. 产品定位",
-        "## 3. 核心用户与场景",
-        "## 4. 核心产品能力",
-        "## 5. 最近半年产品变化",
-        "## 6. 用户与市场表现",
-        "## 7. 商业模式",
-        "## 8. 增长逻辑",
-        "## 9. 核心竞争壁垒",
-        "## 10. 主要问题与风险",
-        "## 11. 对用户指定业务的威胁",
-        "## 12. 值得借鉴的策略",
-        "## 13. 最终判断",
-        "## 14. 研究缺口",
-        "## 15. Sources",
+    required_sections = tuple(
+        [f"## {section_id}. {title}" for section_id, title in REPORT_SECTIONS.items()]
+        + ["## 15. Sources"]
     )
     for section in required_sections:
         if section not in report:

@@ -56,7 +56,7 @@ else:
 
 st.title("🔎 小德竞品研究 Agent")
 st.caption(
-    f"v{APP_VERSION} · 可验证研究流水线：安全检索 → 原子证据 → 独立审核 → 代码门禁 → 引用校验"
+    f"v{APP_VERSION} · 可验证研究流水线：安全检索 → 原子证据 → 独立审核 → 结构化报告 → 确定性引用"
 )
 
 competitor = st.text_input("竞品名称", placeholder="例如：Perplexity")
@@ -195,6 +195,43 @@ if start:
             try:
                 failure = load_manifest(run_dir)
                 st.error(str(failure.get("error", "Agent 未正常完成。")))
+                diagnostics = failure.get("diagnostics", {})
+                raw_validation_errors = (
+                    diagnostics.get("validation_errors", [])
+                    if isinstance(diagnostics, dict)
+                    else []
+                )
+                validation_errors = (
+                    raw_validation_errors if isinstance(raw_validation_errors, list) else []
+                )
+                artifacts = failure.get("artifacts", {})
+                if validation_errors or artifacts:
+                    with st.expander("查看本次失败的具体诊断", expanded=True):
+                        if validation_errors:
+                            st.markdown("**报告校验问题**")
+                            for error in validation_errors:
+                                st.write(f"- {error}")
+                        diagnostic_downloads = (
+                            ("report_validation", "下载校验详情", "application/json"),
+                            ("rejected_report", "下载被拒绝的报告", "text/markdown"),
+                            ("report_draft", "下载结构化报告草稿", "application/json"),
+                            ("report_normalization", "下载程序调整记录", "application/json"),
+                            ("evidence", "下载证据账本", "text/markdown"),
+                            ("audit", "下载审计结果", "text/markdown"),
+                            ("events", "下载事件日志", "text/plain"),
+                        )
+                        for artifact_key, label, mime in diagnostic_downloads:
+                            try:
+                                diagnostic_path = artifact_path(run_dir, failure, artifact_key)
+                            except (FileNotFoundError, ValueError):
+                                continue
+                            st.download_button(
+                                label,
+                                data=diagnostic_path.read_text(encoding="utf-8"),
+                                file_name=f"{run_id}_{diagnostic_path.name}",
+                                mime=mime,
+                                key=f"failure_{run_id}_{artifact_key}",
+                            )
             except (FileNotFoundError, ValueError, json.JSONDecodeError):
                 st.error("Agent 未正常完成，请查看上方最后几行日志。")
             st.stop()
