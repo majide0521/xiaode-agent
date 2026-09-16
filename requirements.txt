@@ -1,3 +1,4 @@
+# Xiaode Agent v0.7.1 runtime dependencies
 beautifulsoup4==4.15.0
 openai==3.13.0
 openai-agents==0.22.2
